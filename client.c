@@ -89,18 +89,21 @@ void printlist(int *fd)
     }
 }
 
-int main(void)
-{
-    /* initializing server address */
-    struct sockaddr_in server_address;
+
+struct sockaddr_in server_address;
+int client_socket;
+void client_creation(int domain, int type, int protocol,int port, u_int32_t internet_address){
+
+    /* initializing server address */    
     bzero(&server_address, sizeof(server_address));
-    server_address.sin_family = AF_INET;
-    server_address.sin_addr.s_addr = INADDR_ANY;
-    server_address.sin_port = htons(8080);
+    server_address.sin_family = domain;
+    server_address.sin_addr.s_addr = internet_address;
+    server_address.sin_port = htons(port);
+
 
     /* creating a client socket */
-    int client_socket;
-    client_socket = socket(AF_INET, SOCK_STREAM, 0);
+    
+    client_socket = socket(domain,type,protocol);
     if (client_socket < 0)
     {
         printf("Socket creation Unsuccessful");
@@ -112,7 +115,12 @@ int main(void)
         exit(-1);
     }
     printf("\nConnection Established !!\n");
+}
 
+int main(void)
+{
+
+    client_creation(AF_INET,SOCK_STREAM,0,8080,INADDR_ANY);
     sendlist(&client_socket);
     char answer;
     int dreturn;

@@ -1,132 +1,189 @@
-#include<sys/shm.h>
-#include"unp.h"
-#define MAX_CLIENT 5
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <errno.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <sys/time.h>
 
-//storing the id number, ip address, number of files and the list of files of a client
-struct client{
-    int id;
-    char ip_address[20];
-    int file_num;
-    char *name;
-    char list[1000][100];
-};
+#define PORT 4444
+#define SIZE 1024
+#define MAX_CLIENT 31
+#define cipherKey 'S'
+#define nofile "File Not Found!"
 
-int *download_status;
-int client_number=0; 
-struct client clients[MAX_CLIENT];
-//Function to send the list of files shared by all the clients connected to the server.
-void sendlist(int *fd,int total_client)
+
+int server_socket, client_socket;
+struct sockaddr_in server_address, client_address;
+int address_length = sizeof(struct sockaddr_in);
+char buffer[SIZE];
+FILE *fp;
+
+void server_creation(int domain, int type, int protocol, int port, u_int32_t internet_address, int max_client)
 {
-    int client_socket= *fd;
-    char handshake[]="CLIENT_START";
 
-    if (send(client_socket, &handshake, sizeof(handshake), 0)<0)
-    {
-        printf("Handshaking Failed\n");
-    }
-    
- 
-    if (send(client_socket, &total_client, sizeof(int), 0)<0)
-    {
-        printf("Total Client Number Not sent\n");
-    }
+    int option_value = 1;
 
-    if (send(client_socket, &clients[0], sizeof(struct client), 0)<0)
-    {
-       printf("Total Client Not sent\n");
-    }
-    
-  
-    
-
-
-    
-
-  
-    printf("List sent.\n");
-
-}
-
-
-int server_socket;
-struct sockaddr_in server_address;
-void server_creation(int domain, int type, int protocol,int port, u_int32_t internet_address, int max_client){
-    /* initializing server socket */
-    server_socket=socket(domain,type,protocol);
-    if (server_socket<0)
+    /* initializing a server socket */
+    server_socket = socket(domain, type, protocol);
+    if (server_socket < 0)
     {
         printf("Socket creation Unsuccessful");
     }
 
+    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &option_value, sizeof(option_value)) < 0)
+    {
+        perror("setsockoption_value");
+        exit(EXIT_FAILURE);
+    }
+
     /* initializing server address */
-    bzero(&server_address,sizeof(server_address));
-    server_address.sin_family=domain;
-    server_address.sin_port=htons(port);
-    server_address.sin_addr.s_addr=internet_address;
+    memset(&server_address, 0, sizeof(server_address));
+    server_address.sin_family = domain;
+    server_address.sin_port = htons(port);
+    server_address.sin_addr.s_addr = internet_address;
 
     /* binding the address to the socket */
-    if (bind(server_socket,(struct sockaddr *)&server_address,sizeof(server_address))<0)
+    if (bind(server_socket, (struct sockaddr *)&server_address, sizeof(server_address)) < 0)
     {
         printf("Binding Unsuccessful");
     }
 
     /* server in the listen mode */
-    if (listen(server_socket,max_client)<0)
+    if (listen(server_socket, max_client) < 0)
     {
         printf("Listen Unsuccessful");
     }
     printf("\nServer Ready\n");
 }
 
-int main(void){
-    
-    server_creation(AF_INET,SOCK_STREAM,0,8080,INADDR_ANY,MAX_CLIENT);
-    while (1)
+// function to clear buffer
+void clearBuf(char *b)
+{
+
+    for (int i = 0; i < SIZE; i++)
+        b[i] = '\0';
+}
+
+// function to encrypt
+char Cipher(char ch)
+{
+    return ch ^ cipherKey;
+}
+
+// function sending file
+int sendFile(char *buf, int s)
+{
+    int i, len;
+    if (fp == NULL)
     {
-        /* establishing a connection via accept funtion */
-        int client_socket;
-        printf("Waiting for clients ..\n\n");
-        client_socket=accept(server_socket,NULL,NULL);
-        printf("Connection Established.\n");
-        client_number++;
-
-
-        /* storing the client information such as clients id,file number, list of the shared files */
-        clients[client_number-1].id=client_number;
-    
-        char ip[17];
-        int return_value=recv(client_socket,&ip,sizeof(ip),0);
-        if(return_value==-1) {printf("read error.\n");} 
-        strncpy(clients[client_number-1].ip_address,ip,20); 
-        printf("IP Address of Client %d connected is %s\n",clients[client_number-1].id,clients[client_number-1].ip_address);
-
-        /* recieve list of files that a client want to share */
-        recv(client_socket,&clients[client_number-1].file_num,sizeof(clients[client_number-1].file_num),0);
-        printf("List of files present in client %d are:-\n",clients[client_number-1].id);
-         for (int i = 1; i < clients[client_number-1].file_num; i++)
-         {
-            recv(client_socket,&clients[client_number-1].list[i-1],sizeof(clients[client_number-1].list[i-1]),0);
-            printf("%s\n",clients[client_number-1].list[i-1]);
-         }
-
-    
-        /* recieve a request of a particular client  */
-        char request;
-        recv(client_socket,&request,sizeof(request),0);
-        switch (request)
-        {
-        case 'l':
-            sendlist(&client_socket,client_number);
-            break;
-        
-        default:
-            break;
-        }
-        
+        strcpy(buf, nofile);
+        len = strlen(nofile);
+        buf[len] = EOF;
+        for (i = 0; i <= len; i++)
+            buf[i] = Cipher(buf[i]);
+        return 1;
     }
 
-    
-    
+    char ch, ch2;
+    for (i = 0; i < s; i++)
+    {
+        ch = fgetc(fp);
+        ch2 = Cipher(ch);
+        buf[i] = ch2;
+        if (ch == EOF)
+            return 1;
+    }
+    return 0;
+}
 
-    
+void open_file_and_send()
+{
+    printf("\nWaiting for file name...\n");
+        clearBuf(buffer);
+        recv(client_socket,buffer,SIZE,0);
+
+        fp = fopen(buffer, "r");
+        printf("\nFile Name Received: %s\n", buffer);
+
+         while (1) {
+             if (sendFile(buffer,SIZE))
+             {
+                 send(client_socket,buffer,SIZE,0);
+                 break;
+             }
+             send(client_socket,buffer,SIZE,0);
+             clearBuf(buffer);   
+         }
+        if (fp != NULL)
+            fclose(fp);
+
+}
+
+void download_response(char *buffer)
+{
+
+    fp = fopen(buffer, "r");
+    printf("\nFile Name Received: %s\n", buffer);
+    if (fp == NULL)
+    {
+        printf("Error in opening the file");
+        exit(EXIT_SUCCESS);
+    }
+
+    while (1)
+    {
+
+        // process
+        if (sendFile(buffer, SIZE))
+        {
+            send(client_socket, buffer, SIZE, 0);
+            break;
+        }
+        send(client_socket, buffer, SIZE, 0);
+        clearBuf(buffer);
+    }
+    if (fp != NULL)
+        fclose(fp);
+}
+
+void upload_response(char *buffer)
+{
+
+    if ((fp = fopen(buffer, "w")) == NULL)
+    {
+        printf("Error in downloading the file");
+        exit(EXIT_SUCCESS);
+    }
+    char data[SIZE] = {0};
+    while (1)
+    {
+
+        if (recv(client_socket, data, sizeof(data), 0) <= 0)
+            break;
+        fprintf(fp, "%s", data);
+        bzero(data, SIZE);
+    }
+    return;
+}
+
+int main(int argc,char* argv[])
+{
+
+
+    system("clear");
+    server_creation(AF_INET, SOCK_STREAM, IPPROTO_TCP, PORT, inet_addr("127.0.0.1"), MAX_CLIENT);
+    client_socket = accept(server_socket, (struct sockaddr *)&server_address, &address_length);
+
+    while (1)
+    {
+        printf("Server ready to recieve data:-\n");
+        char command[2];
+        recv(client_socket, &command, sizeof(command), 0);
+        if (strncmp(command, "d", 1) == 0) open_file_and_send();
+    }
+    close(server_socket);
 }

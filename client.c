@@ -1,161 +1,167 @@
-#include "unp.h"
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
 #include <errno.h>
-#include <dirent.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <sys/time.h>
 
-// storing the id number, ip address, number of files and the list of files of a client
-struct client
-{
-    int id;
-    char ip_address[20];
-    int file_num;
-    char *name;
-    char list[1000][100];
-};
-/* sending the list of files that the client can share to the server when it is connected */
-void sendlist(int *fd)
-{
+#define PORT 4444
+#define SIZE 1024
+#define cipherKey 'S'
 
-    /* sending the client ip to the server */
-    int myfd = *fd;
-    char s[17];
-    FILE *f = fopen("./ipaddress", "r");
-    fscanf(f, "%s", s);
-    printf("Client's IP Address is %s\n", s);
-    send(myfd, s, sizeof(s), 0);
-
-    /* setting up the path */
-    char path[30];
-    strcpy(path, "/home/");
-    strcpy(path, strcat(path, getenv("USER")));
-    strcpy(path, strcat(path, "/Desktop/"));
-
-    struct dirent *dt;
-    DIR *dir = opendir(path);
-    if (dir != NULL)
-    {
-        printf("Directory opened.\n");
-
-        char filename[1000][100];
-        strcpy(filename[0], "STARTOFFILES");
-        int file_num = 1;
-
-        
-        while ((dt = readdir(dir)) != NULL)
-        {
-            strcpy(filename[file_num], dt->d_name);
-            if (strcmp(filename[file_num], ".") != 0 && strcmp(filename[file_num], "..") != 0)
-            {
-              
-                file_num++;
-            }
-        }
-        printf("\n");
-        strcpy(filename[file_num], "ENDOFFILE");
-        send(myfd, &file_num, sizeof(file_num), 0);
-
-        for (int i = 1; i < file_num; i++)
-        {
-            send(myfd, &filename[i], sizeof(filename[i]), 0);
-        }
-    }
-}
-
-void printlist(int *fd)
-{
-    int c;
-    int process_socket = *fd;
-    char handshake[15];
-    struct client clients;
-
-    printf("Loading List from the Server. \nPlease Wait..\n");
-
-    if ( recv(process_socket, &handshake, sizeof(handshake), 0)<0)
-    {
-        printf("Handshaking Failed\n");
-    }
-
-    if (recv(process_socket, &c, sizeof(int), 0) < 0)
-    {
-        printf("Total Client Not recieved\n");
-    }
-
-     if (recv(process_socket, &clients, sizeof(struct client), 0) < 0)
-    {
-        printf("Total Client Not recieved\n");
-    }
-    for (int  i = 0; i < 6; i++)
-    {
-        printf("%s\n",clients.list[i]);
-    }
-}
-
-
-struct sockaddr_in server_address;
 int client_socket;
-void client_creation(int domain, int type, int protocol,int port, u_int32_t internet_address){
+struct sockaddr_in server_address, client_address;
+int address_length = sizeof(struct sockaddr_in);
+char buffer[SIZE];
+FILE *fp;
 
-    /* initializing server address */    
-    bzero(&server_address, sizeof(server_address));
-    server_address.sin_family = domain;
-    server_address.sin_addr.s_addr = internet_address;
-    server_address.sin_port = htons(port);
+void client_creation(int domain, int type, int protocol, int port, u_int32_t internet_address)
+{
 
+    // int option_value = 1;
 
-    /* creating a client socket */
-    
-    client_socket = socket(domain,type,protocol);
+    /* initializing a server socket */
+    client_socket = socket(domain, type, protocol);
     if (client_socket < 0)
     {
         printf("Socket creation Unsuccessful");
     }
-    /* connecting to the server  */
-    if (connect(client_socket, (struct sockaddr *)&server_address, sizeof(server_address)) < 0)
-    {
-        printf("Connection Failed");
-        exit(-1);
-    }
-    printf("\nConnection Established !!\n");
+
+    /* initializing server address */
+    memset(&server_address, 0, sizeof(server_address));
+    server_address.sin_family = domain;
+    server_address.sin_port = htons(port);
+    server_address.sin_addr.s_addr = internet_address;
 }
 
-int main(void)
+// function to clear buffer
+void clearBuf(char *b)
+{
+    for (int i = 0; i < SIZE; i++)
+        b[i] = '\0';
+}
+
+// function for decryption
+char Cipher(char ch)
+{
+    return ch ^ cipherKey;
+}
+
+// function to receive file
+int recvFile(char *buf, int s)
+{
+    char ch;
+    for (int i = 0; i < s; i++)
+    {
+        ch = buf[i];
+        ch = Cipher(ch);
+        if (ch == EOF)
+            return 1;
+        else
+            fprintf(fp,"%c", ch);
+    }
+    return 0;
+}
+
+void download(char *filename)
 {
 
-    client_creation(AF_INET,SOCK_STREAM,0,8080,INADDR_ANY);
-    sendlist(&client_socket);
-    char answer;
-    int dreturn;
+    if ((fp = fopen(filename, "w")) == NULL)
+    {
+        printf("Error in downloading the file");
+        exit(EXIT_SUCCESS);
+    }
+    char data[SIZE] = {0};
     while (1)
     {
-        printf("Enter choice:\n'l' to get list of files\n'd' to download file\n'q' to quit\n>");
-        scanf("%c", &answer);
-        getchar();
 
-        if (answer == 'l')
-        {
-            printf("\nList Request Sent to the Server.\n");
-            send(client_socket,&answer,sizeof(answer),0);
-            printlist(&client_socket);
-        }
-        else if (answer == 'd')
-        {
-            printf("\nDownload Request Sent to the Server.\n");
-            /* dreturn=download(&client_socket);  */
-        }
-        else if (answer == 'q')
-        {
-            char c[2];
-            c[0] = 'q';
-            c[1] = '\0';
-            write(client_socket, (const void *)c, 2);
-            exit(0);
-        }
+        if (recv(client_socket, data, sizeof(data), 0) <= 0)
+            break;
+        fprintf(fp, "%s", data);
+        bzero(data, SIZE);
+    }
+    return;
+}
 
-        else
-        {
-            printf("Invalid choice. Please enter your choice again\n");
-            fflush(stdin);
-        }
+void upload(char *filename)
+{
+
+    if ((fp = fopen(filename, "r")) == NULL)
+    {
+        printf("Error in opening the file");
+        exit(EXIT_SUCCESS);
     }
 
+    char data[SIZE] = {0};
+    while (fgets(data, SIZE, fp) != NULL)
+    {
+
+        if (send(client_socket, data, sizeof(data), 0) == -1)
+        {
+            perror("Error in sending data");
+            exit(1);
+        }
+        bzero(data, SIZE);
+    }
+}
+
+void create_file_and_download(char *buffer)
+{
+    if ((fp = fopen(buffer, "w")) != NULL)
+    {
+        printf("File Creation successful");
+    }
+    else
+    {
+        printf("File Creation Unsuccessful");
+    }
+
+    send(client_socket, buffer, SIZE, 0);
+
+    printf("\n---------Data Received---------\n");
+
+    while (1)
+    {
+        clearBuf(buffer);
+        recv(client_socket, buffer, SIZE, 0);
+
+        if (recvFile(buffer, SIZE))
+        {
+            break;
+        }
+        printf("\n-------------------------------\n");
+    }
+    if (fp != NULL)
+        fclose(fp);
+}
+int main()
+{
+
+    system("clear");
+    client_creation(AF_INET, SOCK_STREAM, IPPROTO_TCP, PORT, inet_addr("127.0.0.1"));
+    int ret = connect(client_socket, (struct sockaddr *)&server_address, address_length);
+
+    while (1)
+    {
+        printf("Press one of the following commands:-\n> d: download a file\n> u: upload a file\n> q: quit\n");
+
+        char command[2];
+        fgets(command, sizeof(command), stdin);
+        getchar();
+        send(client_socket, &command, sizeof(command), 0);
+
+
+        if (strncmp(command, "d", 1) == 0)
+        {
+            printf("Enter the file name you want to download:- ");
+            scanf("%s", buffer);
+            getchar();
+            create_file_and_download(buffer); 
+        }
+    }
     return 0;
 }

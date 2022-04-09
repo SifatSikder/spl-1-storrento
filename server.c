@@ -8,12 +8,11 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <sys/time.h>
+#include <dirent.h>
 
 #define PORT 4444
-#define SIZE 1024
+#define SIZE 4096
 #define MAX_CLIENT 31
-#define cipherKey 'S'
-#define nofile "File Not Found!"
 
 
 int server_socket, client_socket;
@@ -60,130 +59,166 @@ void server_creation(int domain, int type, int protocol, int port, u_int32_t int
     printf("\nServer Ready\n");
 }
 
-// function to clear buffer
 void clearBuf(char *b)
 {
-
-    for (int i = 0; i < SIZE; i++)
-        b[i] = '\0';
+    for (int i = 0; i < SIZE; i++) b[i] = '\0';
 }
 
-// function to encrypt
-char Cipher(char ch)
+ssize_t size_of_a_file(char* filename)
 {
-    return ch ^ cipherKey;
+    FILE *fp1=fopen(filename,"rb");
+    ssize_t size=0;
+
+    fseek(fp1,0,SEEK_END);
+    size=ftell(fp1);
+    fclose(fp1);
+
+    return size;
+
 }
 
-// function sending file
-int sendFile(char *buf, int s)
+void sendlist()
 {
-    int i, len;
-    if (fp == NULL)
-    {
-        strcpy(buf, nofile);
-        len = strlen(nofile);
-        buf[len] = EOF;
-        for (i = 0; i <= len; i++)
-            buf[i] = Cipher(buf[i]);
-        return 1;
-    }
 
-    char ch, ch2;
-    for (i = 0; i < s; i++)
+    /* setting up the path */
+    char path[30];
+    strcpy(path, "/home/");
+    strcpy(path, strcat(path, getenv("USER")));
+    strcpy(path, strcat(path, "/My_Torrent/Server"));
+
+    puts(path);
+    struct dirent *dt;
+    DIR *dir = opendir(path);
+    if (dir != NULL)
     {
-        ch = fgetc(fp);
-        ch2 = Cipher(ch);
-        buf[i] = ch2;
-        if (ch == EOF)
-            return 1;
+        printf("Directory opened.\n");
+
+        char filename[1000][100];
+        strcpy(filename[0], "STARTOFFILES");
+        int file_num = 1;
+
+        
+        while ((dt = readdir(dir)) != NULL)
+        {
+            strcpy(filename[file_num], dt->d_name);
+            if (strcmp(filename[file_num], ".") != 0 && strcmp(filename[file_num], "..") != 0 && filename[file_num][0]!='.')
+            {
+              
+                file_num++;
+            }
+        }
+        printf("\n");
+        strcpy(filename[file_num], "ENDOFFILE");
+        
+        file_num--;
+        send(client_socket, &file_num , sizeof(file_num), 0);
+
+        for (int i = 1; i <= file_num; i++)
+        {
+            printf("filename[%d] is %s\n",i,filename[i]);
+             send(client_socket, &filename[i], sizeof(filename[i]), 0);
+        }
     }
-    return 0;
 }
 
 void open_file_and_send()
 {
     printf("\nWaiting for file name...\n");
-        clearBuf(buffer);
-        recv(client_socket,buffer,SIZE,0);
+    clearBuf(buffer);
+    recv(client_socket, buffer, SIZE, 0);
 
-        fp = fopen(buffer, "r");
-        printf("\nFile Name Received: %s\n", buffer);
+    ssize_t filesize=size_of_a_file(buffer);
+    send(client_socket,&filesize,sizeof(filesize),0);
 
-         while (1) {
-             if (sendFile(buffer,SIZE))
-             {
-                 send(client_socket,buffer,SIZE,0);
-                 break;
-             }
-             send(client_socket,buffer,SIZE,0);
-             clearBuf(buffer);   
-         }
-        if (fp != NULL)
-            fclose(fp);
-
-}
-
-void download_response(char *buffer)
-{
-
-    fp = fopen(buffer, "r");
+    fp = fopen(buffer, "rb");
     printf("\nFile Name Received: %s\n", buffer);
-    if (fp == NULL)
-    {
-        printf("Error in opening the file");
-        exit(EXIT_SUCCESS);
-    }
 
-    while (1)
+    int n;
+    ssize_t total = 0;
+    char sendline[SIZE] = {0};
+    while (((n = fread(sendline, sizeof(char), SIZE, fp)) > 0) && filesize!=total)
     {
-
-        // process
-        if (sendFile(buffer, SIZE))
+        total += n;
+        if (n != SIZE && ferror(fp))
         {
-            send(client_socket, buffer, SIZE, 0);
-            break;
+            perror("Read File Error");
+            exit(1);
         }
-        send(client_socket, buffer, SIZE, 0);
-        clearBuf(buffer);
+
+        if (send(client_socket, sendline, n, 0) == -1)
+        {
+            perror("Can't send file");
+            exit(1);
+        }
+        memset(sendline, 0, SIZE);
     }
-    if (fp != NULL)
-        fclose(fp);
+    fclose(fp);
 }
 
-void upload_response(char *buffer)
+void download_file()
 {
+    recv(client_socket, buffer, SIZE, 0);
+    ssize_t filesize;
+    recv(client_socket,&filesize,sizeof(filesize),0);
 
-    if ((fp = fopen(buffer, "w")) == NULL)
+    if ((fp = fopen(buffer, "wb")) != NULL)
     {
-        printf("Error in downloading the file");
-        exit(EXIT_SUCCESS);
+        printf("File Creation successful");
     }
-    char data[SIZE] = {0};
-    while (1)
+    else
     {
+        printf("File Creation Unsuccessful");
+    }
 
-        if (recv(client_socket, data, sizeof(data), 0) <= 0)
-            break;
-        fprintf(fp, "%s", data);
-        bzero(data, SIZE);
+    ssize_t n, total=0;
+    char buff[SIZE] = {0};
+    while (filesize!=total)
+    {
+        n = recv(client_socket, &buff, SIZE, 0);
+        total += n;
+        if (n == -1)
+        {
+            perror("Receive File Error");
+            exit(1);
+        }
+
+        if (fwrite(buff, sizeof(char), n, fp) != n)
+        {
+            perror("Write File Error");
+            exit(1);
+        }
+        memset(buff, 0, SIZE);
+        printf("\n-------------------------------\n");
     }
-    return;
+
+    fclose(fp);
+
+
 }
 
 int main(int argc,char* argv[])
 {
-
-
     system("clear");
-    server_creation(AF_INET, SOCK_STREAM, IPPROTO_TCP, PORT, inet_addr("127.0.0.1"), MAX_CLIENT);
+    server_creation(AF_INET, SOCK_STREAM, IPPROTO_TCP, PORT, inet_addr("192.168.0.7"), MAX_CLIENT);
     client_socket = accept(server_socket, (struct sockaddr *)&server_address, &address_length);
 
-    while (1)
+     while (1)
     {
         printf("Server ready to recieve data:-\n");
         char command[2];
         recv(client_socket, &command, sizeof(command), 0);
-        if (strncmp(command, "d", 1) == 0) open_file_and_send();
+        if (strncmp(command, "d", 1) == 0)
+        {
+            sendlist();
+            open_file_and_send();
+        }
+        else if (strncmp(command, "u", 1) == 0)
+        {
+            download_file();
+        }
+        else  if (strncmp(command, "q", 1) == 0) break;
     }
-    close(server_socket);
+    close(server_socket);   
+    return 0;
 }
+
